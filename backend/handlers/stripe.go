@@ -166,6 +166,28 @@ func StripeWebhook(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			}
 
 			handleSubscriptionChange(db, cfg, subscription)
+
+		case "charge.succeeded":
+			var charge stripe.Charge
+			err := json.Unmarshal(event.Data.Raw, &charge)
+			if err != nil {
+				log.Printf("Error parsing webhook JSON: %v", err)
+				c.Status(http.StatusBadRequest)
+				return
+			}
+
+			handleChargeSucceeded(db, cfg, charge)
+
+		case "customer.created", "customer.updated":
+			var customer stripe.Customer
+			err := json.Unmarshal(event.Data.Raw, &customer)
+			if err != nil {
+				log.Printf("Error parsing webhook JSON: %v", err)
+				c.Status(http.StatusBadRequest)
+				return
+			}
+
+			handleCustomerUpsert(db, cfg, customer)
 		}
 
 		c.Status(http.StatusOK)
@@ -237,6 +259,56 @@ func handleCheckoutSessionCompleted(db *sql.DB, cfg config.Config, sess stripe.C
 				log.Printf("Webhook: scheduled cancellation of old subscription %s at period end", oldSubID)
 			}
 		}
+	}
+}
+
+// handleChargeSucceeded filters by saas_id via the linked customer's metadata.
+// Charges themselves carry no metadata so we look up the customer from Stripe.
+func handleChargeSucceeded(db *sql.DB, cfg config.Config, charge stripe.Charge) {
+	if charge.Customer == nil || charge.Customer.ID == "" {
+		log.Printf("Webhook charge.succeeded: no customer linked to charge %s, skipping", charge.ID)
+		return
+	}
+
+	cust, err := stripecustomer.Get(charge.Customer.ID, nil)
+	if err != nil {
+		log.Printf("Webhook charge.succeeded: failed to fetch customer %s: %v", charge.Customer.ID, err)
+		return
+	}
+
+	if cust.Metadata["saas_id"] != cfg.StripeSaaSID {
+		log.Printf("Webhook charge.succeeded: customer %s saas_id mismatch, ignoring", charge.Customer.ID)
+		return
+	}
+
+	log.Printf("[Stripe] charge.succeeded: charge %s, customer %s, amount %d %s",
+		charge.ID, charge.Customer.ID, charge.Amount, charge.Currency)
+}
+
+// handleCustomerUpsert filters by saas_id directly from the customer metadata.
+// On customer.created the customer may not yet have saas_id (Stripe fires this
+// before our checkout.session.completed handler can tag it), so we log and skip.
+func handleCustomerUpsert(db *sql.DB, cfg config.Config, customer stripe.Customer) {
+	if customer.Metadata["saas_id"] != cfg.StripeSaaSID {
+		log.Printf("Webhook customer event: customer %s saas_id mismatch or not yet tagged, ignoring", customer.ID)
+		return
+	}
+
+	userID := customer.Metadata["user_id"]
+	planType := customer.Metadata["plan_type"]
+	if userID == "" || planType == "" {
+		log.Printf("Webhook customer event: customer %s missing user_id or plan_type metadata, ignoring", customer.ID)
+		return
+	}
+
+	_, err := db.Exec(
+		"UPDATE users SET stripe_customer_id = $1, plan_type = $2 WHERE id = $3",
+		customer.ID, planType, userID,
+	)
+	if err != nil {
+		log.Printf("Webhook customer event: failed to sync customer %s to DB: %v", customer.ID, err)
+	} else {
+		log.Printf("[Stripe] customer upsert: customer %s, user %s, plan %s", customer.ID, userID, planType)
 	}
 }
 
