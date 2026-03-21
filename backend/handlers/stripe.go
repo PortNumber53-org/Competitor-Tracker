@@ -18,6 +18,37 @@ import (
 	"github.com/truvis/competitor-tracker/backend/config"
 )
 
+// ensureStripeCustomer returns an existing stripe_customer_id for the user,
+// or creates a new Stripe customer pre-tagged with saas_id metadata so all
+// downstream events (customer.created, charge.succeeded, etc.) carry it.
+func ensureStripeCustomer(db *sql.DB, cfg config.Config, userID, email, planType string) (string, error) {
+	var existing sql.NullString
+	_ = db.QueryRow("SELECT stripe_customer_id FROM users WHERE id = $1", userID).Scan(&existing)
+	if existing.Valid && existing.String != "" {
+		return existing.String, nil
+	}
+
+	cust, err := stripecustomer.New(&stripe.CustomerParams{
+		Email: stripe.String(email),
+		Metadata: map[string]string{
+			"saas_id":   cfg.StripeSaaSID,
+			"plan_type": planType,
+			"user_id":   userID,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	_, err = db.Exec("UPDATE users SET stripe_customer_id = $1 WHERE id = $2", cust.ID, userID)
+	if err != nil {
+		log.Printf("ensureStripeCustomer: failed to save customer %s for user %s: %v", cust.ID, userID, err)
+	}
+
+	log.Printf("[Stripe] Created customer %s for user %s (plan: %s)", cust.ID, userID, planType)
+	return cust.ID, nil
+}
+
 func CreateCheckoutSession(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := c.GetString("userID")
@@ -50,9 +81,12 @@ func CreateCheckoutSession(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			log.Printf("Warning: No valid price ID found in DB for plan %s, using mock priceID: %v", planType, err)
 		}
 
-		// If you have a separate frontend port:
-		// domain = "http://localhost:20910"
-		// Ideally from config.AllowedOrigins or an explicit BASE_URL
+		customerID, err := ensureStripeCustomer(db, cfg, userID, email, planType)
+		if err != nil {
+			log.Printf("CreateCheckoutSession: failed to ensure customer for user %s: %v", userID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare customer"})
+			return
+		}
 
 		params := &stripe.CheckoutSessionParams{
 			PaymentMethodTypes: stripe.StringSlice([]string{"card"}),
@@ -65,7 +99,7 @@ func CreateCheckoutSession(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			},
 			SuccessURL:        stripe.String(cfg.FrontendURL + "/dashboard?session_id={CHECKOUT_SESSION_ID}"),
 			CancelURL:         stripe.String(cfg.FrontendURL + "/dashboard"),
-			CustomerEmail:     stripe.String(email),
+			Customer:          stripe.String(customerID),
 			ClientReferenceID: stripe.String(userID),
 			Metadata: map[string]string{
 				"saas_id":   cfg.StripeSaaSID,
@@ -406,6 +440,13 @@ func SwitchPlan(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 		var currentSubID sql.NullString
 		db.QueryRow("SELECT stripe_subscription_id FROM users WHERE id = $1", userID).Scan(&currentSubID)
 
+		customerID, err := ensureStripeCustomer(db, cfg, userID, email, req.Plan)
+		if err != nil {
+			log.Printf("SwitchPlan: failed to ensure customer for user %s: %v", userID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare customer"})
+			return
+		}
+
 		// Determine switch mode and trial end
 		switchMode := "scheduled"
 		if req.Immediate {
@@ -423,7 +464,7 @@ func SwitchPlan(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			},
 			SuccessURL:        stripe.String(cfg.FrontendURL + "/subscription?switch=success"),
 			CancelURL:         stripe.String(cfg.FrontendURL + "/subscription"),
-			CustomerEmail:     stripe.String(email),
+			Customer:          stripe.String(customerID),
 			ClientReferenceID: stripe.String(userID),
 			Metadata: map[string]string{
 				"saas_id":             cfg.StripeSaaSID,
