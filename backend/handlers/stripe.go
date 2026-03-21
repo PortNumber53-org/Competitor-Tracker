@@ -88,6 +88,12 @@ func CreateCheckoutSession(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			return
 		}
 
+		sharedMeta := map[string]string{
+			"saas_id":   cfg.StripeSaaSID,
+			"plan_type": planType,
+			"user_id":   userID,
+		}
+
 		params := &stripe.CheckoutSessionParams{
 			PaymentMethodTypes: stripe.StringSlice([]string{"card"}),
 			Mode:               stripe.String(string(stripe.CheckoutSessionModeSubscription)),
@@ -101,17 +107,12 @@ func CreateCheckoutSession(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			CancelURL:         stripe.String(cfg.FrontendURL + "/dashboard"),
 			Customer:          stripe.String(customerID),
 			ClientReferenceID: stripe.String(userID),
-			Metadata: map[string]string{
-				"saas_id":   cfg.StripeSaaSID,
-				"plan_type": planType,
-				"user_id":   userID,
+			Metadata:          sharedMeta,
+			PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
+				Metadata: sharedMeta,
 			},
 			SubscriptionData: &stripe.CheckoutSessionSubscriptionDataParams{
-				Metadata: map[string]string{
-					"saas_id":   cfg.StripeSaaSID,
-					"plan_type": planType,
-					"user_id":   userID,
-				},
+				Metadata: sharedMeta,
 			},
 		}
 
@@ -453,6 +454,12 @@ func SwitchPlan(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			switchMode = "immediate"
 		}
 
+		sharedMeta := map[string]string{
+			"saas_id":   cfg.StripeSaaSID,
+			"plan_type": req.Plan,
+			"user_id":   userID,
+		}
+
 		params := &stripe.CheckoutSessionParams{
 			PaymentMethodTypes: stripe.StringSlice([]string{"card"}),
 			Mode:               stripe.String(string(stripe.CheckoutSessionModeSubscription)),
@@ -473,12 +480,11 @@ func SwitchPlan(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 				"switch_mode":         switchMode,
 				"old_subscription_id": currentSubID.String,
 			},
+			PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
+				Metadata: sharedMeta,
+			},
 			SubscriptionData: &stripe.CheckoutSessionSubscriptionDataParams{
-				Metadata: map[string]string{
-					"saas_id":   cfg.StripeSaaSID,
-					"plan_type": req.Plan,
-					"user_id":   userID,
-				},
+				Metadata: sharedMeta,
 			},
 		}
 
