@@ -172,6 +172,11 @@ func StripeWebhook(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 }
 
 func handleCheckoutSessionCompleted(db *sql.DB, cfg config.Config, sess stripe.CheckoutSession) {
+	if sess.Metadata["saas_id"] != cfg.StripeSaaSID {
+		log.Println("Webhook ignored: checkout session saas_id mismatch or missing")
+		return
+	}
+
 	userID := sess.ClientReferenceID
 	if userID == "" {
 		log.Println("Webhook: no client_reference_id found")
