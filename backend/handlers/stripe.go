@@ -108,9 +108,6 @@ func CreateCheckoutSession(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 			Customer:          stripe.String(customerID),
 			ClientReferenceID: stripe.String(userID),
 			Metadata:          sharedMeta,
-			PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
-				Metadata: sharedMeta,
-			},
 			SubscriptionData: &stripe.CheckoutSessionSubscriptionDataParams{
 				Metadata: sharedMeta,
 			},
@@ -479,9 +476,6 @@ func SwitchPlan(db *sql.DB, cfg config.Config) gin.HandlerFunc {
 				"user_id":             userID,
 				"switch_mode":         switchMode,
 				"old_subscription_id": currentSubID.String,
-			},
-			PaymentIntentData: &stripe.CheckoutSessionPaymentIntentDataParams{
-				Metadata: sharedMeta,
 			},
 			SubscriptionData: &stripe.CheckoutSessionSubscriptionDataParams{
 				Metadata: sharedMeta,
