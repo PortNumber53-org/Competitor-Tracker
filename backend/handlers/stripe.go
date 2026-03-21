@@ -12,6 +12,7 @@ import (
 	"github.com/stripe/stripe-go/v76"
 	portalsession "github.com/stripe/stripe-go/v76/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v76/checkout/session"
+	stripecustomer "github.com/stripe/stripe-go/v76/customer"
 	stripesubscription "github.com/stripe/stripe-go/v76/subscription"
 	"github.com/stripe/stripe-go/v76/webhook"
 	"github.com/truvis/competitor-tracker/backend/config"
@@ -191,6 +192,21 @@ func handleCheckoutSessionCompleted(db *sql.DB, cfg config.Config, sess stripe.C
 	newSubID := ""
 	if sess.Subscription != nil {
 		newSubID = sess.Subscription.ID
+	}
+
+	// Tag the Stripe customer with saas_id so downstream events (charges,
+	// invoices, customer.updated) can be attributed to this service.
+	if sess.Customer != nil && sess.Customer.ID != "" {
+		_, err := stripecustomer.Update(sess.Customer.ID, &stripe.CustomerParams{
+			Metadata: map[string]string{
+				"saas_id":   cfg.StripeSaaSID,
+				"plan_type": planType,
+				"user_id":   userID,
+			},
+		})
+		if err != nil {
+			log.Printf("Webhook: failed to tag customer %s with saas_id metadata: %v", sess.Customer.ID, err)
+		}
 	}
 
 	_, err := db.Exec(
