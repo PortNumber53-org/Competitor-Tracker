@@ -3,7 +3,12 @@ package config
 import (
 	"os"
 	"strconv"
+
+	"bufio"
+	"path/filepath"
+	"strings"
 )
+
 
 type Config struct {
 	Port                 string
@@ -26,6 +31,7 @@ type Config struct {
 }
 
 func LoadConfig() Config {
+	loadConfigINI()
 	return Config{
 		Port:                 getEnv("PORT", "20911"),
 		GinMode:              getEnv("GIN_MODE", "debug"),
@@ -70,4 +76,38 @@ func getEnv(key, defaultVal string) string {
 		return value
 	}
 	return defaultVal
+}
+
+func loadConfigINI() {
+	paths := []string{"/etc/Shopify-Price-Tracker/config.ini"}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		paths = append(paths, filepath.Join(home, ".config", "Shopify-Price-Tracker", "config.ini"))
+	}
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+				continue
+			}
+			if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+				continue
+			}
+			key, val, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			key = strings.TrimSpace(key)
+			val = strings.TrimSpace(val)
+			val = strings.Trim(val, "'")
+			if key != "" && os.Getenv(key) == "" {
+				os.Setenv(key, val)
+			}
+		}
+		f.Close()
+	}
 }
