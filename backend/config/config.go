@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-
 type Config struct {
 	Port                 string
 	GinMode              string
@@ -79,15 +78,16 @@ func getEnv(key, defaultVal string) string {
 }
 
 func loadConfigINI() {
-	paths := []string{"/etc/Shopify-Price-Tracker/config.ini"}
+	paths := []string{"/etc/Competitor-Tracker/config.ini"}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		paths = append(paths, filepath.Join(home, ".config", "Shopify-Price-Tracker", "config.ini"))
+		paths = append(paths, filepath.Join(home, ".config", "Competitor-Tracker", "config.ini"))
 	}
 	for _, p := range paths {
 		f, err := os.Open(p)
 		if err != nil {
 			continue
 		}
+		defer f.Close()
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
 			line := strings.TrimSpace(sc.Text())
@@ -103,11 +103,13 @@ func loadConfigINI() {
 			}
 			key = strings.TrimSpace(key)
 			val = strings.TrimSpace(val)
-			val = strings.Trim(val, "'")
+			val = strings.Trim(val, "'\"")
 			if key != "" && os.Getenv(key) == "" {
 				os.Setenv(key, val)
 			}
 		}
-		f.Close()
+		if err := sc.Err(); err != nil {
+			continue
+		}
 	}
 }
